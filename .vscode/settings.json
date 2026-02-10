@@ -1,0 +1,6 @@
+{
+    "sonarlint.connectedMode.project": {
+        "connectionId": "fool-penguin",
+        "projectKey": "Fool-Penguin_static_analysis_lab"
+    }
+}
