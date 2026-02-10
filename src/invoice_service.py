@@ -65,28 +65,22 @@ class InvoiceService:
                 problems.append(f"Unknown category for {it.sku}")
         return problems
 
-    def compute_total(self, inv: Invoice) -> Tuple[float, List[str]]:
-        warnings: List[str] = []
-        problems = self._validate(inv)
-        if problems:
-            raise ValueError("; ".join(problems))
-
+    def _calc_subtotal_and_fragile(self, items: List[LineItem]) -> Tuple[float, float]:
         subtotal = 0.0
         fragile_fee = 0.0
-        for it in inv.items:
+        for it in items:
             line = it.unit_price * it.qty
             subtotal += line
             if it.fragile:
                 fragile_fee += 5.0 * it.qty
+        return subtotal, fragile_fee
 
-        shipping = self._calc_shipping(inv.country, subtotal)
-
+    def _calc_discount(self, inv: Invoice, subtotal: float, warnings: List[str]) -> float:
         discount = 0.0
         if inv.membership in MEMBERSHIP_DISCOUNTS:
             discount += subtotal * MEMBERSHIP_DISCOUNTS[inv.membership]
-        else:
-            if subtotal > 3000:
-                discount += 20
+        elif subtotal > 3000:
+            discount += 20
 
         coupon = inv.coupon.strip() if inv.coupon else ""
         if coupon:
@@ -94,17 +88,31 @@ class InvoiceService:
                 discount += subtotal * self._coupon_rate[coupon]
             else:
                 warnings.append("Unknown coupon")
+        return min(discount, subtotal)
 
-        discount = min(discount, subtotal)
+    def _calc_tax(self, country: str, taxable_base: float) -> float:
+        tax_rate = TAX_RATES.get(country, TAX_RATES["DEFAULT"])
+        return taxable_base * tax_rate
+
+    def _maybe_add_upgrade_warning(self, subtotal: float, membership: str, warnings: List[str]) -> None:
+        if subtotal > 10000 and membership not in ("gold", "platinum"):
+            warnings.append("Consider membership upgrade")
+
+    def compute_total(self, inv: Invoice) -> Tuple[float, List[str]]:
+        warnings: List[str] = []
+        problems = self._validate(inv)
+        if problems:
+            raise ValueError("; ".join(problems))
+
+        subtotal, fragile_fee = self._calc_subtotal_and_fragile(inv.items)
+        shipping = self._calc_shipping(inv.country, subtotal)
+        discount = self._calc_discount(inv, subtotal, warnings)
         taxable_base = max(0.0, subtotal - discount)
-        tax_rate = TAX_RATES.get(inv.country, TAX_RATES["DEFAULT"])
-        tax = taxable_base * tax_rate
+        tax = self._calc_tax(inv.country, taxable_base)
 
         total = subtotal + shipping + fragile_fee + tax - discount
         if total < 0:
             total = 0
 
-        if subtotal > 10000 and inv.membership not in ("gold", "platinum"):
-            warnings.append("Consider membership upgrade")
-
+        self._maybe_add_upgrade_warning(subtotal, inv.membership, warnings)
         return total, warnings
